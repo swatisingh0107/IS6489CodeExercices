@@ -1,0 +1,455 @@
+---
+title: "Statistics and Predictive Analytics, Lab 3"
+author: "Swati Singh"
+output:
+  html_notebook
+---
+
+Welcome to Lab 3!  
+
+- Check Canvas for the due date.
+- Make sure to write your name in the yaml header above.  
+- Take care that the output type in the header remains "html_notebook." (If you accidentally change it, by clicking "Knit to HTML" for example," simply change the output back to "html_notebook" and save.  This should restore the "Preview" option for you.) 
+- Before compiling, click the "Run" button in the upper left of the RStudio toolbar, and select "run all."  This will ensure that your code chunks have run and will be visible to us in the compiled HTML document that you submit for the grade.
+- Click the "Preview" button on the toolbar to compile your notebook into HTML.  This resulting HTML document is what you will submit through the Lab 1 assignment.
+- The HTML answer key for this notebook is available for you to check, if you want to do so.  
+
+
+### Introduction
+
+In this lab we will be examining a dataset that records home prices in Los Angeles, along with home attributes. House price is the outcome variable. The lab will give you practice with the following skills:
+
+- EDA and data modeling.
+- Fitting and interpreting log and log-log models.
+- Comparing models using both error metrics and residual plots.
+- Assessing effect sizes.
+- Communicating results.
+
+We will be working with a dataset called `LA homes`.
+
+
+```{r message=FALSE, warning=FALSE}
+# Load packages and data
+
+library(tidyverse)
+library(arm)
+library(caret)
+d <-  read.csv("http://andrewpbray.github.io/data/LA.csv")
+
+# Alternatively, you can download this data set from Canvas:
+# find "LA_homes.csv" in the data folder.
+
+```
+
+### Data inspection, data modeling and cleaning
+
+```{r}
+# inspect the data
+glimpse(d)
+summary(d)   
+
+```
+
+Well, LA is a weird place.  A home with 28,000 square feet?  30 bathrooms?
+
+We have some data issues we need to address before we get started with EDA, chiefly related to missing data in the following fields:  spa, pool, type, and garage. This cleaning and missing data imputation is rather arduous and will take up the first part of the lab as a (lengthy) demonstration.  It is worth paying attention to the demonstration, though, because real world data is often like this.
+
+1. `spa`.
+
+```{r}
+table(d$spa) # empty table
+
+head(d$spa) # inspect the top of the column
+```
+
+Spa has 1594 NAs (all missing).
+
+2. `pool`.
+
+```{r}
+table(d$pool)
+```
+
+Pool has 1448 empty rows.  Empty probably means no pool?  Hard to know for sure.
+
+3. `type` 
+
+```{r}
+table(d$type)
+```
+
+Type has 39 empty rows, which may be missing data (at least that is how we will interpret it.)
+
+4. `garage`.
+
+```{r}
+table(d$garage)
+```
+
+Garage has 388 empty rows and 237 NAs. Empty probably means no garage?  NAs we will treat as missing observations.  We will learn how to impute NAs later; for now we will allow `lm()` to remove these observations.
+
+Let's do the necessary recoding, given these (possibly imperfect) data modeling decisions:
+
+1. Clearly we can just ignore `spa`. 
+
+2. Recode empty rows of `pool` as "N," to be consistent with "Y."
+
+```{r}
+d$pool <- as.character(d$pool) # create empty character variable
+
+d$pool[d$pool==""] <- "N" # replace "" with "N"
+
+table(d$pool) # Check result
+```
+
+
+3. We will simply eliminate the empty rows of `type` when using that predictor in a model; to do so we need to code those as NAs (because `lm()` will automatically ignore NAs).
+
+```{r}
+d$type <- as.character(d$type) # create empty character variable
+
+which(d$type=="") # check to see which rows are empty
+
+d$type[d$type==""] <- NA # replace those rows with NA
+
+unique(d$type) # Check result
+```
+
+4. Recode empty garage as 0.
+
+```{r}
+d$garage <- as.character(d$garage)
+
+d$garage[d$garage==""] <- "0" # Notice that we are requiring 0
+# to be a character variable, in keeping with the other numbers.
+
+unique(d$garage) # Check result
+
+sum(is.na(d$garage)) # 237 NAs
+```
+
+### EDA 
+
+Once again we are modelling price data, which, as we've noted, often requires log transformation.  Why?  Log transformation compresses right skewed data and helps the linear model fit better.   The function we use in R for log transformation, `log(x)`, uses the natural log.  Let's look at a plot of `sqft` and `price`:
+
+```{r}
+
+ggplot(d, aes(sqft, price)) +
+  geom_point() +
+  theme_minimal() +
+  stat_smooth(method="lm", se = F) +
+  labs(title = "price ~ sqft")
+
+display(lm(price ~ sqft, d))
+
+```
+
+The problem with price is that it spans many orders of magnitude, especially in Beverly Hills.
+
+```{r}
+
+ggplot(d, aes(sqft, price)) +
+  geom_point() +
+  theme_minimal() +
+  facet_wrap(~city) +
+  stat_smooth(method="lm", se = F) +
+  labs(title = "price ~ sqft, varying by city")
+
+```
+
+After log transformation of price, each fixed distance represents a multiplication (not an addition) of the value.
+
+```{r}
+
+ggplot(d, aes(sqft, log(price))) +
+  geom_point() +
+  theme_minimal() +
+  stat_smooth(method="lm", se = F) +
+  labs(title = "log(price) ~ sqft")
+
+display(lm(log(price) ~ sqft, d))
+
+```
+
+That doesn't look quite right.  The problem is that `sqft` is also right skewed. So let's log transform `sqft` as well.
+
+```{r}
+
+ggplot(d, aes(log(sqft), log(price))) +
+  geom_point() +
+  theme_minimal() +
+  stat_smooth(method="lm", se = F) +
+  labs(title = "log(price) ~ log(sqft)")
+
+
+```
+
+That's better!  It is clear that a linear model is appropriate for this (now) linear relationship. Regressing a logged outcome on a logged predictor, as we've done here, is called a log-log model. 
+
+### Modeling
+
+Let's review the interpretation of a log model, with reference to the Boston data.
+
+```{r}
+library(MASS)
+data(Boston)
+
+display(lm(log(medv) ~ rm + dis, data = Boston))
+
+```
+
+In the lecture videos I said that we need to exponentiate coefficients in a model with a log transformed outcome variable to get the percentage increase in the outcome associated with a 1 unit increase in the predictor. (Exponentiation means to raise $e$ to the power of the coefficient:  $e^.34$ = `exp(.34)`. ) Thus, `exp(.04)` = 1.04, which is a 4% increase compared the baseline of 1: (1.04 - 1) / 1 = .04 * 100 = 4%. As a rule of thumb, we can dispense with exponentiation when the coefficient is close to 1, as in this case, because exponentiating returns a number very close to the original:  `exp(.04)` = .04. In this case the rule of thumb works well. But it does not work well for coefficients further from 0.  For `rm`, `exp(.34)` = 1.4, which we can interpret as follows: an increase of 1 unit in `rm` is associated with a 40% increase in medv over the baseline of 1.
+
+**Question 1**:  Practice this.  According to the following model, what percentage increase in `medv` is associated with a 1 unit increase in `chas` (going from 0 to 1)?
+
+```{r}
+model1<-lm(log(medv) ~ rm + dis + chas, data = Boston)
+display(model1)
+
+#Your code goes here
+chas_estimate<-round(summary(model1)$coefficients[4,1],2)
+cat("An increase of 1 unit in chas is associated with ", round(100*(exp(chas_estimate)-1),2), "% increae in medv")
+```
+
+>An increase of 1 unit in chas is associated with  23.37 % increae in medv
+
+What do we do with negative coefficients?  Rather than calculating the percentage increase over 1 (for the exponentiated coefficient), we calculate the percentage *decrease*.  Example:  `exp(.11)` = 1.11, which is a (1.11 - 1)/1 = .11 or 11 percent increase, but `exp(-.02)` = .98, which is a (.98 - 1)/1 = -.02, or 2% decrease. 
+
+**Question 2**: According to the following model, what percentage decrease in `medv` is associated with a 1 unit increase in `nox`?
+
+```{r}
+model2<-lm(log(medv) ~ rm + dis + chas + nox, data = Boston)
+display(model2)
+
+#Your code goes here
+nox_estimate<-round(summary(model2)$coefficients["nox",1],2)
+nox_estimate
+cat("An increase of 1 unit in nox is associated with ", abs(round(100*(exp(nox_estimate)-1),2)), "% decrease in medv")
+
+```
+
+>An increase of 1 unit in nox is associated with  78.13 % decrease in medv
+
+We can easily fit a log-log model in which both outcome and a predictor are log transformed.  For example:
+
+```{r}
+display(lm(log(medv) ~ log(rm) + dis + chas + nox, data = Boston))
+
+```
+
+How do we interpret the coefficient for `log(rm)` in this log-log model?  We don't need to exponentiate.  Instead, we can interpret the coefficient directly as a percentage increase.  Each 1% increase in rm is associated with a 1.74% increase in medv. 
+
+Now, using the LA Homes dataset, fit a log-log simple regression model: regress `log(price)` (the outcome) on `log(sqft)` (the predictor).  
+
+**Question 3**:  Report and interpret (following the example above) the coefficient for `log(sqft)`.
+
+```{r}
+# Your code goes here
+display(lm(log(price) ~ log(sqft), data = d))
+
+```
+
+>Each 1% increase in sqft is associated with a 1.44% increase in price. 
+
+### Modeling
+
+**Question 4**: We have been assuming, based on the plotting we did, that these log transformations have improved the model.  Show, empirically, that they have.  Fit two models: 
+
+1. price ~ sqft, 
+2. log(price) ~ log(sqft).  
+
+Calculate and report RMSE and $R^2$ for each model. Keep in mind when calculating RMSE that you can't compare logged and unlogged outcome variables.  You will need to exponentiate the logged outcome in order to compare it the unlogged outcome, since, given the identities we discussed in class, `exp(log(price))` = price.  However, there are some nuances here that we need to attend to.  As mentioned in lecture, if we simply exponentiate the model's fitted values for comparison with the actual values of the target variable, then we introduce what is known as "retransformation bias." To correct for this bias we need to multiply the exponentiated fitted values by the mean of the exponentiated residuals (known as "Duan's smearing estimator"): $\sum_1^n e^{\epsilon}$. 
+
+```{r}
+# Your code goes here
+model1<-lm(price~sqft,d)
+model2<-lm(log(price) ~ log(sqft),d)
+
+cat("Model 1: R^2=", summary(model1)$r.squared,", RMSE= ",sqrt(mean(model1$residuals^2)),"\n")
+cat("Model 2: R^2=", summary(model2)$r.squared,", RMSE= ",sqrt(mean((d$price-exp(fitted(model2)))^2)))
+
+#if we simply exponentiate the model's fitted values for comparison with the actual values of the target variable, then we introduce what is known as "retransformation bias." Let's correct this bias
+cat("\nModel 2: R^2=",summary(model2)$r.squared,
+    ", Corrected RMSE= ",sqrt(mean((d$price-(exp(fitted(model2))*mean(exp(residuals(model2)))))^2)))
+
+
+```
+
+
+> The $R^2$ is higher and RMSE is lower for the second model i.e. the log-log model. This model appears to fit better. But it still is not a good solution since the corrected RMSE is very high. This model has a standard error >$1000000  
+
+We can also compare models based on residual analysis.  One of the mathematical assumptions of the linear model is that the residuals are normally distributed with mean 0:  $N(0, \sigma^2)$.  The best way to check to see if this assumption has been met is to look at a residual plot, which consists of the fitted values on the x-axis and the residuals on the y-axis.  A good residual plot consists in a random spread of points around the 0 line.  This (non) pattern indicates that the systematic component of the model has removed the structure from the data, and all that is left over is the stochastic component of the model---random noise.
+
+Here is what a good residual plot looks like using made up data:
+
+```{r}
+
+# data parameters
+n <- 500
+a <- 1.4
+b <- 2.3
+sigma <- 10
+df <- data.frame(x = runif(n, 0, 10))
+
+# Create the outcome variable
+df$y <- a + b*df$x + rnorm(n,0, sigma)
+
+# Fit model
+mod <- lm(y~x, df)
+
+# Plot residuals
+plot(mod, which = 1)
+```
+
+The residuals are randomly and normally distributed around the 0 line.
+
+```{r}
+hist(residuals(mod))
+```
+
+Below are some lousy residual plots (again, using made up data), indicating that there is structure remaining in the data that the model has not explained:
+
+
+```{r}
+df$y <- a + b*df$x^1.75 + rnorm(n,0, sigma)
+
+mod <- lm(y~x, df)
+
+plot(mod, which = 1)
+
+
+```
+
+```{r}
+df$y <- -a + b*df$x * rnorm(n,0, sigma)
+
+mod <- lm(y~x, df)
+
+plot(mod, which = 1)
+```
+
+
+A normally distributed outcome variable is not required for regression.  Nevertheless, a skewed outcome variable---which is typical of prices or salaries---will often lead to a poor fit in which the mathematical assumptions of regression are violated.  Here, for example, are histograms of both the logged and unlogged price:
+
+
+```{r}
+ggplot(d, aes(price)) +
+  geom_histogram() + 
+  labs(title = "Histogram of price")
+
+ggplot(d, aes(log(price))) +
+  geom_histogram() + 
+  labs(title = "Histogram of log price")
+```
+
+In this case `sqft` is also quite skewed:
+
+```{r}
+ggplot(d, aes(sqft)) +
+  geom_histogram() + 
+  labs(title = "Histogram of price")
+
+ggplot(d, aes(log(sqft))) +
+  geom_histogram() + 
+  labs(title = "Histogram of log price")
+```
+
+**Question 5**: Create residual plots for the two models above: 
+
+1. price ~ sqft, 
+2. log(price) ~ log(sqft).  
+
+Which model has better looking residuals: the unlogged model or the log-log model?  Explain your reasoning.
+
+```{r}
+#Write your code here
+plot(model1,which=2)
+```
+```{r}
+plot(model2,which=2)
+```
+
+>Model1 has the issue of outliers. Model2 on the other hand fits the data better. On analyzing the Q-Q plot, we see plot comes very close to a straight line, except possibly for the upper and lower tail, where we find a couple of residuals somewhat larger than expected. On the other hand, Model1 indicate heavy tails, or an excess of extreme values, relative to the normal distribution.
+
+**Question 6**: Let's see if we can improve on the `log(price) ~ log(sqft)` model.  To that model add as predictors the following variables:  bed, city, bath, type, garage and pool.  (We'll call this the full model.) Report $R^2$ and construct a residual plot.  Explain whether you would choose this larger model over the smaller log-log model.
+
+```{r}
+# Your code goes here
+
+summary(full <- lm(log(price) ~ log(sqft) +
+                     bed  + 
+                     city + 
+                     bath + 
+                     type + 
+                     garage + 
+                     pool,
+                     data = d))
+
+plot(full, which = 1)
+
+```
+
+> The full model has a R-squared of 0.88 and explains the variance in the data better. It is safe it so it is a better model than the log-log model which has an r-squared of 0.77. Also, the residual summary line is almost flat which confirms that the model fits the data better. 
+
+**Question 7**: What is the strongest predictor from the full model?
+
+```{r warning=FALSE}
+# Your code goes here
+summary(linear_mod <- train(log(price)~log(sqft)+city+type+bath+bed+bath+garage+pool,
+             method = "lm",
+             d,
+             preProcess = c("center","scale"),
+              na.action=na.pass))
+
+```
+
+> log(sqft) has the largest effect size. Also it is a significant variable as its p-value is < 2e-16
+
+### Communication
+
+**Question 8**: Create and explain a plot that conveys the main "story" from your modeling efforts.
+
+```{r}
+# Your code goes here
+d$bed<-as.factor(d$bed)
+ggplot(d,aes(log(sqft),log(price),col=city))+
+  geom_point()+
+  stat_smooth(method= "lm", se = F) 
+
+```
+```{r}
+ggplot(d,aes(city,log(price),col=bed))+
+  geom_point()+
+  scale_color_brewer(palette="OrRd")
+```
+```{r}
+d$bath<-as.factor(d$bath)
+ggplot(d,aes(city,log(price),col=bath))+
+  geom_point()+
+  scale_color_brewer(palette="OrRd")
+```
+> Looking at the model summary, log(sqft), city, bed and bath are the strongest predictors. On plotting these predictor variables on the scatter plot, we see following patters. 
+1. There is positive linear relationship between log(sqft) and log(price)
+2. The houses in Beverly hills are bigger and pricier than other cities
+3. This also goes with the fact that they have more bedrooms and bathrooms in general.
+
+**Question 9 (optional)**.  Scenario: You work as an data analyst at a construction company in Los Angeles.  You mentioned in passing to your boss that in one of your recent analyses of LA housing prices you noticed an interaction between square footage and city in predicting house price, if you exclude Beverly Hills and consider only single family homes.  You think this is an interesting result, potentially identifying an opportunity for your company.  However, your boss looks glassy-eyed when you say "interaction."  Create a plot and write a paragraph that makes the result understandable to non-statisticians at your company.
+
+```{r}
+# Here is the model you found
+summary(lm(log(price) ~ log(sqft) * 
+             city +
+             bed +
+             bath,
+           data = subset(d, city != "Beverly Hills" & type=="SFR")))
+# Your code goes here
+SFR_Homes<-subset(d, city != "Beverly Hills" & type=="SFR")
+ggplot(SFR_Homes,aes(log(sqft),log(price),col=city))+
+  geom_point()+
+  stat_smooth(method= "lm", se = F) 
+```
+
+> Based on this plot, we can infer the following:
+1. Price increases with increase in Sqft. 
+2. The three cities showed different effect size based on the slope of the linear regression line. The effect of increasing sqft in houses in Long Beach will have a greater impact on the selling price than rest of the cities.
+
